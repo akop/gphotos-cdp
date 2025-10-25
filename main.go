@@ -178,6 +178,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Msgf("failed to get locale: %v", err)
 	}
+	locale, _, _ = strings.Cut(locale, "-") // en-GB -> en
 
 	initLocales()
 	_loc, exists := locales[locale]
