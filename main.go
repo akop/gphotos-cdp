@@ -24,6 +24,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"math"
 	"net/http"
 	"net/url"
@@ -63,6 +64,7 @@ var (
 	nItemsFlag      = flag.Int("n", -1, "number of items to download. If negative, get them all.")
 	devFlag         = flag.Bool("dev", false, "dev mode. we reuse the same session dir (/tmp/gphotos-cdp), so we don't have to auth at every run.")
 	downloadDirFlag = flag.String("dldir", "", "where to write the downloads. defaults to $HOME/Downloads/gphotos-cdp.")
+	yearMonthFlag   = flag.Bool("yearmonth", false, "write the downloads in nested structure dldir/YYYY/MM.")
 	profileFlag     = flag.String("profile", "", "like -dev, but with a user-provided profile dir")
 	fromFlag        = flag.String("from", "", "earliest date to sync (YYYY-MM-DD)")
 	toFlag          = flag.String("to", "", "latest date to sync (YYYY-MM-DD)")
@@ -94,6 +96,7 @@ var errNavigateAborted = errors.New("navigate aborted")
 var errUnexpectedDownload = errors.New("unexpected download")
 var fromDate time.Time
 var toDate time.Time
+var structureYearMonth bool
 var loc GPhotosLocale
 
 func main() {
@@ -151,6 +154,7 @@ func main() {
 			log.Fatal().Msgf("could not parse -to argument %s, must be YYYY-MM-DD", *toFlag)
 		}
 	}
+	structureYearMonth = *yearMonthFlag
 
 	s, err := NewSession()
 	if err != nil {
@@ -178,7 +182,6 @@ func main() {
 	if err != nil {
 		log.Fatal().Msgf("failed to get locale: %v", err)
 	}
-	locale, _, _ = strings.Cut(locale, "-") // en-GB -> en
 
 	initLocales()
 	_loc, exists := locales[locale]
@@ -227,6 +230,7 @@ type Session struct {
 	parentContext    context.Context
 	chromeExecCancel context.CancelFunc
 	downloadDir      string // dir where the photos get stored
+	yearMonth        bool   // downloadDir structure YYYY/MM
 	downloadDirTmp   string // dir where the photos get stored temporarily
 	profileDir       string // user data session dir. automatically created on chrome startup.
 	startNodeParent  *cdp.Node
@@ -306,6 +310,7 @@ func NewSession() (*Session, error) {
 		profileDir:      dir,
 		downloadDir:     downloadDir,
 		downloadDirTmp:  downloadDirTmp,
+		yearMonth:       *yearMonthFlag,
 		globalErrChan:   make(chan error, 1),
 		userPath:        userPath,
 		albumPath:       albumPath,
@@ -573,7 +578,7 @@ func (s *Session) getLocale(ctx context.Context) (string, error) {
 		log.Warn().Err(err).Msg("failed to detect account locale, will assume English (en)")
 		return "en", nil
 	}
-
+	locale, _, _ = strings.Cut(locale, "-") // en-GB -> en
 	return locale, nil
 }
 
@@ -1294,8 +1299,13 @@ func imageIdFromUrl(location string) (string, error) {
 }
 
 // makeOutDir creates a directory in s.downloadDir named of the item ID
-func (s *Session) makeOutDir(imageId string) (string, error) {
-	newDir := filepath.Join(s.downloadDir, imageId)
+func (s *Session) makeOutDir(imageId string, date time.Time) (string, error) {
+	var newDir string
+	if structureYearMonth {
+		newDir = filepath.Join(s.downloadDir, date.Format("2006"), date.Format("01"))
+	} else {
+		newDir = filepath.Join(s.downloadDir, imageId)
+	}
 	if err := os.MkdirAll(newDir, 0700); err != nil {
 		return "", err
 	}
@@ -1332,7 +1342,7 @@ func (s *Session) processDownload(log zerolog.Logger, downloadInfo NewDownload, 
 	log.Trace().Msgf("entering processDownload")
 	start := time.Now()
 
-	outDir, err := s.makeOutDir(imageId)
+	outDir, err := s.makeOutDir(imageId, data.date)
 	if err != nil {
 		return err
 	}
@@ -1381,6 +1391,11 @@ func (s *Session) processDownload(log zerolog.Logger, downloadInfo NewDownload, 
 		log.Debug().Msgf("moving %v to %v", downloadInfo.GUID, newFile)
 		if err := os.Rename(filepath.Join(s.downloadDirTmp, downloadInfo.GUID), newFile); err != nil {
 			return err
+		}
+		if filepath.Base(outDir) != imageId {
+			if err = os.Symlink(newFile, filepath.Join(outDir, imageId)); err != nil {
+				return err
+			}
 		}
 		filePaths = []string{newFile}
 		baseNames = append(baseNames, filepath.Base(newFile))
@@ -1944,6 +1959,56 @@ syncAllLoop:
 	return nil
 }
 
+func migrateYearMonth(downloadDir string, imageId string) error {
+	imagIdDir := filepath.Join(downloadDir, imageId)
+	infoImageIdDir, err := os.Stat(imagIdDir)
+	if err == nil && infoImageIdDir.IsDir() {
+		entries, err := os.ReadDir(imagIdDir)
+		if err != nil {
+			return err
+		}
+		if len(entries) > 1 {
+			return errors.New("found more than one file in imageId folder")
+		} else if len(entries) > 0 {
+			imageFile := entries[0]
+			if ! imageFile.Type().IsRegular() {
+				return errors.New("file in imageId fodler is not a regular file")
+			}
+			imageFileInfo, err := imageFile.Info()
+			if err != nil {
+				return err
+			}
+			modTime := imageFileInfo.ModTime()
+			year := modTime.Format("2006")
+			month := modTime.Format("01")
+
+			targetDirPath := filepath.Join(downloadDir, year, month)
+
+			err = os.MkdirAll(targetDirPath, 0755) 
+			if err != nil {
+				return err
+			}
+			err = os.Rename(filepath.Join(downloadDir, infoImageIdDir.Name(), imageFile.Name()), filepath.Join(targetDirPath, imageFile.Name()))
+			if err != nil {
+				return err
+			}
+			err = os.Symlink(filepath.Join(targetDirPath, imageFile.Name()), filepath.Join(targetDirPath, imageId))
+			if err != nil {
+				return err
+			}
+		}
+		err = os.Remove(filepath.Join(downloadDir, infoImageIdDir.Name()))
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func (s *Session) isNewItem(log zerolog.Logger, imageId string, markFound bool) (bool, error) {
 	if _, exists := s.foundItems.Load(imageId); exists {
 		return false, nil
@@ -1953,7 +2018,12 @@ func (s *Session) isNewItem(log zerolog.Logger, imageId string, markFound bool) 
 	hasFiles, err := s.dirHasFiles(imageId)
 	if err != nil {
 		return false, err
-	} else if hasFiles {
+	}
+	if hasFiles {
+		if structureYearMonth {
+			log.Trace().Msgf("migrating item to year month structure")
+			migrateYearMonth(s.downloadDir, imageId)
+		} 
 		log.Trace().Msgf("skipping item, already downloaded")
 		isNew = false
 	}
@@ -2218,28 +2288,22 @@ func getContentOfFirstVisibleNodeScript(sel string, imageId string) string {
 }
 
 func (s *Session) dirHasFiles(imageId string) (bool, error) {
-	if _, exists := s.existingItems.Load(imageId); !exists {
-		return false, nil
-	}
-	entries, err := os.ReadDir(filepath.Join(s.downloadDir, imageId))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	for _, v := range entries {
-		if !v.IsDir() {
-			f, err := os.Stat(filepath.Join(s.downloadDir, imageId, v.Name()))
-			if err != nil {
-				return false, err
-			}
-			if f.Size() > 0 {
-				return true, nil
+	var errImageIdFound = errors.New("symlink with imageId found")
+	err := filepath.WalkDir(s.downloadDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 || d.IsDir() {
+			if d.Name() == imageId {
+				return errImageIdFound
 			}
 		}
+		return nil // Continue the walk
+	})
+	if err == errImageIdFound {
+		return true, nil
 	}
-	return false, nil
+	return false, err
 }
 
 func (s *Session) getPhotoNodeSelector() string {
