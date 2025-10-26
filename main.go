@@ -2009,7 +2009,13 @@ func migrateYearMonth(downloadDir string, imageId string) error {
 	return err
 }
 
+func timeTracker(log zerolog.Logger, start time.Time, name string) {
+	elapsed := time.Since(start)
+	log.Debug().Msgf("timeTracker %s took %s", name, elapsed)
+}
+
 func (s *Session) isNewItem(log zerolog.Logger, imageId string, markFound bool) (bool, error) {
+	defer timeTracker(log, time.Now(), "isNewItem")
 	if _, exists := s.foundItems.Load(imageId); exists {
 		return false, nil
 	}
