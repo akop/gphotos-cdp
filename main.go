@@ -1984,7 +1984,7 @@ func migrateYearMonth(downloadDir string, imageId string) error {
 
 			targetDirPath := filepath.Join(downloadDir, year, month)
 
-			err = os.MkdirAll(targetDirPath, 0755) 
+			err = os.MkdirAll(targetDirPath, 0700) 
 			if err != nil {
 				return err
 			}
@@ -2027,7 +2027,7 @@ func (s *Session) isNewItem(log zerolog.Logger, imageId string, markFound bool) 
 	}
 	if hasFiles {
 		if structureYearMonth {
-			log.Trace().Msgf("migrating item to year month structure")
+			log.Debug().Msgf("migrating item to year month structure")
 			migrateYearMonth(s.downloadDir, imageId)
 		} 
 		log.Trace().Msgf("skipping item, already downloaded")
