@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 
 // buildDirCache
 func buildDirCache(log zerolog.Logger, cacheMap *sync.Map, directory string) error {
-	defer log.Debug().Msgf("buildDirCache for %s done in %s", directory, elapsedSince(time.Now()))
+	defer logDebugElapsed(log, time.Now(), fmt.Sprintf("buildDirCache for %s done in", directory))
 	err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -32,7 +33,7 @@ func migrateYearMonth(log zerolog.Logger, downloadDir string, imageId string) er
 	infoImageIdDir, err := os.Stat(imagIdDir)
 	if err == nil && infoImageIdDir.IsDir() {
 		log.Debug().Msgf("migrating item to year month structure")
-		defer log.Debug().Msgf("migrateYearMonth done in %s", elapsedSince(time.Now()))
+		defer logDebugElapsed(log, time.Now(), "migrateYearMonth done") 
 		entries, err := os.ReadDir(imagIdDir)
 		if err != nil {
 			return err

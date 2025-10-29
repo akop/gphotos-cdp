@@ -155,7 +155,7 @@ func main() {
 	}
 	structureYearMonth = *yearMonthFlag
 
-	defer log.Info().Msgf("Done in %s", elapsedSince(time.Now()))
+	defer logInfoElapsed(log.Logger, time.Now(), "Done")
 
 	s, err := NewSession()
 	if err != nil {

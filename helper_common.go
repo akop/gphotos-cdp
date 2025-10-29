@@ -3,12 +3,20 @@ package main
 import (
 	"encoding/base64"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
-// elapsedSince
-func elapsedSince(start time.Time) string {
+// logInfoElapsed
+func logInfoElapsed(log zerolog.Logger, start time.Time, name string) {
 	elapsed := time.Since(start)
-	return elapsed.String()
+	log.Info().Msgf("%s in %s", name, elapsed)
+}
+
+// logDebugElapsed
+func logDebugElapsed(log zerolog.Logger, start time.Time, name string) {
+	elapsed := time.Since(start)
+	log.Debug().Msgf("%s in %s", name, elapsed)
 }
 
 // isValidGPhotosId
