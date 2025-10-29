@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"errors"
 	"io/fs"
 	"os"
@@ -12,21 +11,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func timeTracker(log zerolog.Logger, start time.Time, name string) {
-	elapsed := time.Since(start)
-	log.Debug().Msgf("timeTracker %s took %s", name, elapsed)
-}
-
-func isValidGPhotosId(id string) bool {
-	if len(id) < 20 {
-		return false
-	}
-	_, err := base64.URLEncoding.DecodeString(id)
-	return err == nil
-}
-
+// buildDirCache
 func buildDirCache(log zerolog.Logger, cacheMap *sync.Map, directory string) error {
-	defer timeTracker(log, time.Now(), "buildDirCache")
+	defer log.Debug().Msgf("buildDirCache for %s done in %s", directory, elapsedSince(time.Now()))
 	err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -39,12 +26,13 @@ func buildDirCache(log zerolog.Logger, cacheMap *sync.Map, directory string) err
 	return err
 }
 
+// migrateYearMonth
 func migrateYearMonth(log zerolog.Logger, downloadDir string, imageId string) error {
 	imagIdDir := filepath.Join(downloadDir, imageId)
 	infoImageIdDir, err := os.Stat(imagIdDir)
 	if err == nil && infoImageIdDir.IsDir() {
 		log.Debug().Msgf("migrating item to year month structure")
-		defer timeTracker(log, time.Now(), "migrateYearMonth")
+		defer log.Debug().Msgf("migrateYearMonth done in %s", elapsedSince(time.Now()))
 		entries, err := os.ReadDir(imagIdDir)
 		if err != nil {
 			return err

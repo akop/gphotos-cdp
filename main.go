@@ -155,6 +155,8 @@ func main() {
 	}
 	structureYearMonth = *yearMonthFlag
 
+	defer log.Info().Msgf("Done in %s", elapsedSince(time.Now()))
+
 	s, err := NewSession()
 	if err != nil {
 		log.Fatal().Msgf("failed to create session: %v", err)
@@ -205,8 +207,6 @@ func main() {
 	); err != nil {
 		log.Fatal().Msgf("failure during sync: %v", err)
 	}
-
-	log.Info().Msg("Done")
 }
 
 type PhotoData struct {
@@ -1954,7 +1954,7 @@ func (s *Session) isNewItem(log zerolog.Logger, imageId string, markFound bool) 
 	}
 
 	isNew := true
-	if s.dirHasFiles(log, imageId) {
+	if _, isExisting := s.existingItems.Load(imageId); isExisting {
 		if structureYearMonth {
 			migrateYearMonth(log, s.downloadDir, imageId)
 		}
@@ -2219,12 +2219,6 @@ func startDownloadListener(ctx context.Context, newDownloadChan chan NewDownload
 
 func getContentOfFirstVisibleNodeScript(sel string, imageId string) string {
 	return fmt.Sprintf(`[...document.querySelectorAll('[data-p*="%s"] %s')].filter(x => x.checkVisibility()).map(x => x.textContent)[0] || ''`, imageId, sel)
-}
-
-func (s *Session) dirHasFiles(log zerolog.Logger, imageId string) (bool) {
-	defer timeTracker(log, time.Now(), "dirHasFiles")
-	_, found := s.existingItems.Load(imageId)
-	return found
 }
 
 func (s *Session) getPhotoNodeSelector() string {
