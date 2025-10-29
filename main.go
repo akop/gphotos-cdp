@@ -24,7 +24,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"math"
 	"net/http"
 	"net/url"
@@ -296,11 +295,6 @@ func NewSession() (*Session, error) {
 		return nil, err
 	}
 
-	downloadDirEntries, err := os.ReadDir(downloadDir)
-	if err != nil {
-		return nil, err
-	}
-
 	downloadDirTmp := filepath.Join(downloadDir, "tmp")
 	if err := os.MkdirAll(downloadDirTmp, 0700); err != nil {
 		return nil, err
@@ -316,12 +310,7 @@ func NewSession() (*Session, error) {
 		albumPath:       albumPath,
 		newDownloadChan: make(chan NewDownload),
 	}
-
-	for _, e := range downloadDirEntries {
-		if e.IsDir() && e.Name() != "tmp" {
-			s.existingItems.Store(e.Name(), struct{}{})
-		}
-	}
+	buildDirCache(log.Logger, &s.existingItems, downloadDir)
 
 	return s, nil
 }
@@ -1959,77 +1948,16 @@ syncAllLoop:
 	return nil
 }
 
-func migrateYearMonth(downloadDir string, imageId string) error {
-	imagIdDir := filepath.Join(downloadDir, imageId)
-	infoImageIdDir, err := os.Stat(imagIdDir)
-	if err == nil && infoImageIdDir.IsDir() {
-		entries, err := os.ReadDir(imagIdDir)
-		if err != nil {
-			return err
-		}
-		if len(entries) > 1 {
-			return errors.New("found more than one file in imageId folder")
-		} else if len(entries) > 0 {
-			imageFile := entries[0]
-			if ! imageFile.Type().IsRegular() {
-				return errors.New("file in imageId fodler is not a regular file")
-			}
-			imageFileInfo, err := imageFile.Info()
-			if err != nil {
-				return err
-			}
-			modTime := imageFileInfo.ModTime()
-			year := modTime.Format("2006")
-			month := modTime.Format("01")
-
-			targetDirPath := filepath.Join(downloadDir, year, month)
-
-			err = os.MkdirAll(targetDirPath, 0700) 
-			if err != nil {
-				return err
-			}
-			err = os.Rename(filepath.Join(downloadDir, infoImageIdDir.Name(), imageFile.Name()), filepath.Join(targetDirPath, imageFile.Name()))
-			if err != nil {
-				return err
-			}
-			err = os.Symlink(filepath.Join(targetDirPath, imageFile.Name()), filepath.Join(targetDirPath, imageId))
-			if err != nil {
-				return err
-			}
-		}
-		err = os.Remove(filepath.Join(downloadDir, infoImageIdDir.Name()))
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
-}
-
-func timeTracker(log zerolog.Logger, start time.Time, name string) {
-	elapsed := time.Since(start)
-	log.Debug().Msgf("timeTracker %s took %s", name, elapsed)
-}
-
 func (s *Session) isNewItem(log zerolog.Logger, imageId string, markFound bool) (bool, error) {
-	defer timeTracker(log, time.Now(), "isNewItem")
 	if _, exists := s.foundItems.Load(imageId); exists {
 		return false, nil
 	}
 
 	isNew := true
-	hasFiles, err := s.dirHasFiles(imageId)
-	if err != nil {
-		return false, err
-	}
-	if hasFiles {
+	if s.dirHasFiles(log, imageId) {
 		if structureYearMonth {
-			log.Debug().Msgf("migrating item to year month structure")
-			migrateYearMonth(s.downloadDir, imageId)
-		} 
+			migrateYearMonth(log, s.downloadDir, imageId)
+		}
 		log.Trace().Msgf("skipping item, already downloaded")
 		isNew = false
 	}
@@ -2293,23 +2221,10 @@ func getContentOfFirstVisibleNodeScript(sel string, imageId string) string {
 	return fmt.Sprintf(`[...document.querySelectorAll('[data-p*="%s"] %s')].filter(x => x.checkVisibility()).map(x => x.textContent)[0] || ''`, imageId, sel)
 }
 
-func (s *Session) dirHasFiles(imageId string) (bool, error) {
-	var errImageIdFound = errors.New("symlink with imageId found")
-	err := filepath.WalkDir(s.downloadDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Type()&fs.ModeSymlink != 0 || d.IsDir() {
-			if d.Name() == imageId {
-				return errImageIdFound
-			}
-		}
-		return nil // Continue the walk
-	})
-	if err == errImageIdFound {
-		return true, nil
-	}
-	return false, err
+func (s *Session) dirHasFiles(log zerolog.Logger, imageId string) (bool) {
+	defer timeTracker(log, time.Now(), "dirHasFiles")
+	_, found := s.existingItems.Load(imageId)
+	return found
 }
 
 func (s *Session) getPhotoNodeSelector() string {
