@@ -19,7 +19,7 @@ func buildDirCache(log zerolog.Logger, cacheMap *sync.Map, directory string) err
 		if err != nil {
 			return err
 		}
-		if (d.Type()&fs.ModeSymlink != 0 || d.IsDir()) && isValidGPhotosId(d.Name()){
+		if (d.Type()&fs.ModeSymlink != 0 || d.IsDir()) && isValidGPhotosId(d.Name()) {
 			cacheMap.Store(d.Name(), d)
 		}
 		return nil // Continue the walk
@@ -33,7 +33,7 @@ func migrateYearMonth(log zerolog.Logger, downloadDir string, imageId string) er
 	infoImageIdDir, err := os.Stat(imagIdDir)
 	if err == nil && infoImageIdDir.IsDir() {
 		log.Debug().Msgf("migrating item to year month structure")
-		defer logDebugElapsed(log, time.Now(), "migrateYearMonth done") 
+		defer logDebugElapsed(log, time.Now(), "migrateYearMonth done")
 		entries, err := os.ReadDir(imagIdDir)
 		if err != nil {
 			return err

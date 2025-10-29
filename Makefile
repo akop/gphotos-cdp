@@ -7,11 +7,11 @@ build:
 	go build
 
 updateDeps:
-	go get -u .
+	go get -u
 	go mod tidy
 
 fmt:
-	go fmt .
+	go fmt
 
 login:
 	go run . -v -profile $(PROFILE) -dldir $(DLDIR) -from $(DATE_TODAY)
