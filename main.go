@@ -26,12 +26,11 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
+
 	"runtime"
 	"strconv"
 	"strings"
@@ -1268,25 +1267,6 @@ func (*Session) checkForStillProcessing(ctx context.Context) error {
 	return nil
 }
 
-func imageIdFromUrl(location string) (string, error) {
-	// Parse the URL
-	u, err := url.Parse(location)
-	if err != nil {
-		return "", fmt.Errorf("invalid URL %v: %w", location, err)
-	}
-
-	// Split the path into segments
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-
-	// Look for "photo" segment and ensure there's a following segment
-	for i := 0; i < len(parts)-1; i++ {
-		if parts[i] == "photo" {
-			return parts[i+1], nil
-		}
-	}
-	return "", fmt.Errorf("could not find /photo/{imageId} pattern in URL: %v", location)
-}
-
 // makeOutDir creates a directory in s.downloadDir named of the item ID
 func (s *Session) makeOutDir(imageId string, date time.Time) (string, error) {
 	var newDir string
@@ -1381,16 +1361,19 @@ func (s *Session) processDownload(log zerolog.Logger, downloadInfo NewDownload, 
 		if err := os.Rename(filepath.Join(s.downloadDirTmp, downloadInfo.GUID), newFile); err != nil {
 			return err
 		}
-		if filepath.Base(outDir) != imageId {
-			if err = os.Symlink(newFile, filepath.Join(outDir, imageId)); err != nil {
-				return err
+		if structureYearMonth && filepath.Base(outDir) != imageId {
+			_, err := os.Lstat(filepath.Join(outDir, imageId))
+			if os.IsNotExist(err) {
+				if err = os.Symlink(newFile, filepath.Join(outDir, imageId)); err != nil {
+					return err
+				}
 			}
 		}
 		filePaths = []string{newFile}
 		baseNames = append(baseNames, filepath.Base(newFile))
 	}
 
-	if err := doFileDateUpdate(data.date, filePaths); err != nil {
+	if err := doFileDateUpdate(log, data.date, filePaths); err != nil {
 		return err
 	}
 
@@ -1811,7 +1794,7 @@ syncAllLoop:
 			time.Sleep(1 * time.Second)
 		}
 
-		// New new nodes found, does it look like we are done?
+		// New nodes found, does it look like we are done?
 		if retries > 5000 || (retries > 100 && estimatedRemaining < 50) {
 			break
 		}
@@ -2146,31 +2129,10 @@ func (s *Session) checkForRemovedFiles(ctx context.Context) error {
 	return nil
 }
 
-// doFileDateUpdate updates the file date of the downloaded files to the photo date
-func doFileDateUpdate(date time.Time, filePaths []string) error {
-	log.Debug().Msgf("setting file date for %v", filePaths)
-
-	for _, f := range filePaths {
-		if err := setFileDate(f, date); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func doActionWithTimeout(ctx context.Context, action chromedp.Action, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := action.Do(ctx); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Sets modified date of file to given date
-func setFileDate(filepath string, date time.Time) error {
-	if err := os.Chtimes(filepath, date, date); err != nil {
 		return err
 	}
 	return nil
@@ -2223,135 +2185,4 @@ func getContentOfFirstVisibleNodeScript(sel string, imageId string) string {
 
 func (s *Session) getPhotoNodeSelector() string {
 	return fmt.Sprintf(`a[href^=".%s/photo/"]`, s.albumPath)
-}
-
-// compiled year regex
-var yearRegex = regexp.MustCompile(`\d{4}`)
-var dayRegex = regexp.MustCompile(`\d{1,2}`)
-var timeRegex = regexp.MustCompile(`(\d{1,2}):(\d\d)(?::\d\d)?.?([aApP][Mm])?$`)
-var timeZoneRegex = regexp.MustCompile(`GMT([-+])?(\d{1,2})(?::(\d\d))?`)
-
-func parseDate(dateStr, timeStr, tzStr string) (time.Time, error) {
-	var year, month, day, hour, minute int
-	yearStr := yearRegex.FindString(dateStr)
-	if yearStr != "" {
-		year, _ = strconv.Atoi(yearStr)
-		dateStr = strings.Replace(dateStr, yearStr, "", 1)
-	} else {
-		year = time.Now().Year()
-	}
-	log.Trace().Msgf("parsed year: %d, dateStr: %s", year, dateStr)
-
-	dayStr := dayRegex.FindString(dateStr)
-	if dayStr != "" {
-		day, _ = strconv.Atoi(dayStr)
-	}
-	dateStr = strings.Replace(dateStr, dayStr, "", 1)
-
-	for i, v := range loc.ShortMonthNames {
-		if strings.Contains(strings.ToUpper(dateStr), strings.ToUpper(v)) {
-			month = i + 1
-			break
-		}
-	}
-	if month == 0 {
-		return time.Time{}, fmt.Errorf("could not find month in string %s", dateStr)
-	}
-	log.Trace().Msgf("parsed month: %d, dateStr: %s", month, dateStr)
-
-	if timeStr != "" {
-		timeMatch := timeRegex.FindStringSubmatch(timeStr)
-		if timeMatch == nil {
-			return time.Time{}, fmt.Errorf("could not find time in string %s", timeStr)
-		}
-		hour, _ = strconv.Atoi(timeMatch[1])
-		minute, _ = strconv.Atoi(timeMatch[2])
-		if strings.EqualFold(timeMatch[3], "pm") && hour < 12 {
-			hour += 12
-		}
-		if strings.EqualFold(timeMatch[3], "am") && hour == 12 {
-			hour = 0
-		}
-	}
-
-	// read time zone from timezoneStr in format GMT-05:00
-	var timeZone *time.Location
-	timeZoneStr := strings.Trim(tzStr, " ")
-	if timeZoneStr != "" {
-		timeZoneMatch := timeZoneRegex.FindStringSubmatch(timeZoneStr)
-		if timeZoneMatch != nil {
-			tzHour, _ := strconv.Atoi(timeZoneMatch[2])
-			tzMinute, _ := strconv.Atoi(timeZoneMatch[3])
-			offset := tzHour*60*60 + tzMinute*60
-			if timeZoneMatch[1] == "-" {
-				offset = -offset
-			}
-			timeZone = time.FixedZone("", offset)
-		} else {
-			return time.Time{}, fmt.Errorf("could not parse time zone in string %s", timeZoneStr)
-		}
-	} else {
-		timeZone = time.Local
-	}
-	return time.Date(year, time.Month(month), day, hour, minute, 0, 0, timeZone), nil
-}
-
-func absInt(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-// Compare two file names, where s2 is sometimes mangled by gphotos
-// there will be some false positives, this is ok
-func compareMangled(_s1, _s2 string) bool {
-	doCompare := func(s1, s2 string) bool {
-		sr1 := []rune(s1)
-		sr2 := []rune(s2)
-
-		l1 := len(sr1)
-		for i := range slices.Backward(sr1) {
-			if sr1[i] == '.' {
-				l1 = i + 1
-				break
-			}
-		}
-
-		l2 := len(sr2)
-		for i := range slices.Backward(sr2) {
-			if sr2[i] == '.' {
-				l2 = i + 1
-				break
-			}
-		}
-
-		i1 := 0
-		for i1 < len(sr1) && sr1[i1] == '.' && sr2[i1] != '.' {
-			i1++
-		}
-
-		for i2 := range l2 {
-			if i1 >= len(sr1) {
-				return i2 == l2-1 && sr2[i2] == '.'
-			}
-			if sr1[i1] != sr2[i2] && sr2[i2] != '_' {
-				return false
-			}
-			i1++
-		}
-
-		return i1 >= l1
-	}
-
-	if doCompare(_s1, _s2) {
-		return true
-	}
-
-	// URL-decoding s1 since Google Photos may return URL-encoded filenames
-	if decoded, err := url.QueryUnescape(_s1); err == nil {
-		return doCompare(decoded, _s2)
-	}
-
-	return false
 }

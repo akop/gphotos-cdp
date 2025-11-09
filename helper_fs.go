@@ -76,3 +76,24 @@ func migrateYearMonth(log zerolog.Logger, downloadDir string, imageId string) er
 	}
 	return err
 }
+
+// doFileDateUpdate updates the file date of the downloaded files to the photo date
+func doFileDateUpdate(log zerolog.Logger, date time.Time, filePaths []string) error {
+	log.Debug().Msgf("setting file date for %v", filePaths)
+
+	for _, f := range filePaths {
+		if err := setFileDate(f, date); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Sets modified date of file to given date
+func setFileDate(filepath string, date time.Time) error {
+	if err := os.Chtimes(filepath, date, date); err != nil {
+		return err
+	}
+	return nil
+}
